@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -21,47 +23,50 @@ func main() {
 	loadDotEnv()
 	bot, err := tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_APITOKEN"))
 	if err != nil {
-		panic(err)
+		log.Fatalf("Can't connect to Telegram: %v", err)
 	}
-	bot.Debug = true
+	bot.Debug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
+	if err != nil {
+		log.Fatalf("Can't read TELEGRAM_DEBUG environment variable: %v", err)
+	}
 
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
-	// ctx := context.Background()
-	// ctx, cancel := context.WithCancel(ctx)
-	// defer cancel()
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	// updates := bot.GetUpdatesChan(u)
-	// go receiveUpdates(ctx, updates)
-	// log.Println("Start listening for updates. Press enter to stop")
-	// cancel()
-	// log.Println("Start listening for updates. Press enter to stop")
-	// os.Exit(0)
+	// Start bot in separate goroutine.
+	updates := bot.GetUpdatesChan(updateConfig)
+	go receiveUpdates(ctx, updates, bot)
+	log.Println("Start listening for updates. Press Enter key to stop.")
+
+	// Wait Enter to stop bot.
+	fmt.Scanln()
+	log.Println("Bot stopped.")
+	os.Exit(0)
 
 	// Start polling Telegram for updates.
-	updates := bot.GetUpdatesChan(updateConfig)
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
+	// updates := bot.GetUpdatesChan(updateConfig)
+	// for update := range updates {
+	// 	if update.Message == nil {
+	// 		continue
+	// 	}
 
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-		msg.ReplyToMessageID = update.Message.MessageID
+	// 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
+	// 	msg.ReplyToMessageID = update.Message.MessageID
 
-		if _, err := bot.Send(msg); err != nil {
-			panic(err)
-		}
-	}
+	// 	if _, err := bot.Send(msg); err != nil {
+	// 		panic(err)
+	// 	}
+	// }
 }
 
-func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel, bot tgbotapi.BotAPI) {
-	// `for {` means the loop is infinite until we manually stop it
+func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel, bot *tgbotapi.BotAPI) {
 	for {
 		select {
-		// stop looping if ctx is cancelled
-		case <-ctx.Done():
+		case <-ctx.Done(): // Stop if someone ("main") stopped context.
 			return
-		// receive update from channel and then handle it
 		case update := <-updates:
 			handleUpdate(update, bot)
 		}
@@ -69,6 +74,14 @@ func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel, bot tg
 }
 
 var (
+	help = `Hi. Bot supports following commands:
+	/help - prints this help.
+	/menu - shows menu.
+	`
+	commands = map[string]func(chatId int64, bot *tgbotapi.BotAPI) error{
+		"help": sendHelp,
+		"menu": sendMenu,
+	}
 
 	// Menu texts
 	firstMenu  = "<b>Menu 1</b>\n\nA beautiful menu with a shiny inline button."
@@ -97,68 +110,51 @@ var (
 	)
 )
 
-func handleUpdate(update tgbotapi.Update, bot tgbotapi.BotAPI) {
+func handleUpdate(update tgbotapi.Update, bot *tgbotapi.BotAPI) {
 	switch {
-	// Handle messages
-	case update.Message != nil:
+	case update.Message != nil: // Messages.
 		handleMessage(update.Message, bot)
 		break
-
-	// Handle button clicks
-	case update.CallbackQuery != nil:
+	case update.CallbackQuery != nil: // Buttons (aka InlineKeyboard events).
 		handleButton(update.CallbackQuery, bot)
 		break
 	}
 }
 
-func handleMessage(message *tgbotapi.Message, bot tgbotapi.BotAPI) {
+func handleMessage(message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 	user := message.From
 	text := message.Text
+	chatId := message.Chat.ID
 
-	if user == nil {
+	if user == nil { // Answer only real users.
 		return
 	}
 
-	// Print to console
 	log.Printf("%s wrote %s", user.FirstName, text)
 
 	var err error
 	if strings.HasPrefix(text, "/") {
-		err = handleCommand(message.Chat.ID, text, bot)
-		// } else if screaming && len(text) > 0 {
-		// 	msg := tgbotapi.NewMessage(message.Chat.ID, strings.ToUpper(text))
-		// 	// To preserve markdown, we attach entities (bold, italic..)
-		// 	msg.Entities = message.Entities
-		// 	_, err = bot.Send(msg)
+		handler, ok := commands[text]
+		if !ok {
+			msg := tgbotapi.NewMessage(chatId, fmt.Sprintf("Command '%s' is unknown.\n%s", text, help))
+			_, err := bot.Send(msg)
+		} else {
+			err = handler(chatId, bot)
+		}
 	} else {
-		// This is equivalent to forwarding, without the sender's name
-		copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-		_, err = bot.CopyMessage(copyMsg)
+		msg := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf("Got it at %v", message.Time()))
+		msg.ReplyToMessageID = message.MessageID
+		_, err := bot.Send(msg)
+		// copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
+		// _, err = bot.CopyMessage(copyMsg)
 	}
 
 	if err != nil {
-		log.Printf("An error occured: %s", err.Error())
+		log.Printf("Can't handle input message %v: %s", message, err.Error())
 	}
 }
 
-// When we get a command, we react accordingly
-func handleCommand(chatId int64, command string, bot tgbotapi.BotAPI) error {
-	var err error
-
-	switch command {
-	case "/reset":
-		// TODO
-		break
-
-	case "/menu":
-		err = sendMenu(chatId, bot)
-		break
-	}
-
-	return err
-}
-
-func handleButton(query *tgbotapi.CallbackQuery, bot tgbotapi.BotAPI) {
+func handleButton(query *tgbotapi.CallbackQuery, bot *tgbotapi.BotAPI) {
 	var text string
 
 	markup := tgbotapi.NewInlineKeyboardMarkup()
@@ -181,10 +177,16 @@ func handleButton(query *tgbotapi.CallbackQuery, bot tgbotapi.BotAPI) {
 	bot.Send(msg)
 }
 
-func sendMenu(chatId int64, bot tgbotapi.BotAPI) error {
+func sendMenu(chatId int64, bot *tgbotapi.BotAPI) error {
 	msg := tgbotapi.NewMessage(chatId, firstMenu)
 	msg.ParseMode = tgbotapi.ModeHTML
 	msg.ReplyMarkup = firstMenuMarkup
+	_, err := bot.Send(msg)
+	return err
+}
+
+func sendHelp(chatId int64, bot *tgbotapi.BotAPI) error {
+	msg := tgbotapi.NewMessage(chatId, help)
 	_, err := bot.Send(msg)
 	return err
 }
