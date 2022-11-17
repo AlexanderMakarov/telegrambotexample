@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
@@ -45,21 +47,6 @@ func main() {
 	fmt.Scanln()
 	log.Println("Bot stopped.")
 	os.Exit(0)
-
-	// Start polling Telegram for updates.
-	// updates := bot.GetUpdatesChan(updateConfig)
-	// for update := range updates {
-	// 	if update.Message == nil {
-	// 		continue
-	// 	}
-
-	// 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-	// 	msg.ReplyToMessageID = update.Message.MessageID
-
-	// 	if _, err := bot.Send(msg); err != nil {
-	// 		panic(err)
-	// 	}
-	// }
 }
 
 func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel, bot *tgbotapi.BotAPI) {
@@ -77,6 +64,7 @@ var (
 	help = `Hi. Bot supports following commands:
 	/help - prints this help.
 	/menu - shows menu.
+	Also it rephrases eny string you sent to it.
 	`
 	commands = map[string]func(chatId int64, bot *tgbotapi.BotAPI) error{
 		"help": sendHelp,
@@ -84,28 +72,17 @@ var (
 	}
 
 	// Menu texts
-	firstMenu  = "<b>Menu 1</b>\n\nA beautiful menu with a shiny inline button."
-	secondMenu = "<b>Menu 2</b>\n\nA better menu with even more shiny inline buttons."
+	menuText = "<b>Menu 1</b>\n\nA beautiful menu with a shiny inline buttons."
 
 	// Button texts
-	nextButton     = "Next"
-	backButton     = "Back"
+	siteButton     = "Site"
 	tutorialButton = "Tutorial"
+	closeButton    = "Close"
 
-	// Keyboard layout for the first menu. One button, one row
-	firstMenuMarkup = tgbotapi.NewInlineKeyboardMarkup(
+	menuMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(nextButton, nextButton),
-		),
-	)
-
-	// Keyboard layout for the second menu. Two buttons, one per row
-	secondMenuMarkup = tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(backButton, backButton),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL(tutorialButton, "https://core.telegram.org/bots/api"),
+			tgbotapi.NewInlineKeyboardButtonURL(siteButton, "https://core.telegram.org/bots/api"),
+			tgbotapi.NewInlineKeyboardButtonData(tutorialButton, tutorialButton),
 		),
 	)
 )
@@ -126,7 +103,7 @@ func handleMessage(message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 	text := message.Text
 	chatId := message.Chat.ID
 
-	if user == nil { // Answer only real users.
+	if user == nil { // Answer only to real users.
 		return
 	}
 
@@ -134,19 +111,24 @@ func handleMessage(message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 
 	var err error
 	if strings.HasPrefix(text, "/") {
-		handler, ok := commands[text]
+		handler, ok := commands[text[1:]]
 		if !ok {
 			msg := tgbotapi.NewMessage(chatId, fmt.Sprintf("Command '%s' is unknown.\n%s", text, help))
-			_, err := bot.Send(msg)
+			_, err = bot.Send(msg)
 		} else {
 			err = handler(chatId, bot)
 		}
 	} else {
-		msg := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf("Got it at %v", message.Time()))
+		words := strings.Split(text, " ")
+		if len(words) > 1 {
+			rand.Seed(time.Now().UnixNano())
+			rand.Shuffle(len(words), func(i, j int) { words[i], words[j] = words[j], words[i] })
+			text = strings.Join(words, " ")
+		}
+
+		msg := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf("At %v:\n%s", message.Time(), text))
 		msg.ReplyToMessageID = message.MessageID
-		_, err := bot.Send(msg)
-		// copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-		// _, err = bot.CopyMessage(copyMsg)
+		_, err = bot.Send(msg)
 	}
 
 	if err != nil {
@@ -155,32 +137,22 @@ func handleMessage(message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 }
 
 func handleButton(query *tgbotapi.CallbackQuery, bot *tgbotapi.BotAPI) {
-	var text string
-
-	markup := tgbotapi.NewInlineKeyboardMarkup()
-	message := query.Message
-
-	if query.Data == nextButton {
-		text = secondMenu
-		markup = secondMenuMarkup
-	} else if query.Data == backButton {
-		text = firstMenu
-		markup = firstMenuMarkup
+	if query.Data == tutorialButton {
+		err := sendHelp(query.Message.Chat.ID, bot)
+		if err != nil {
+			log.Printf("Can't send help: %s", err.Error())
+		}
 	}
 
+	// Answer to Telegram that button was handled.
 	callbackCfg := tgbotapi.NewCallback(query.ID, "")
 	bot.Send(callbackCfg)
-
-	// Replace menu text and keyboard
-	msg := tgbotapi.NewEditMessageTextAndMarkup(message.Chat.ID, message.MessageID, text, markup)
-	msg.ParseMode = tgbotapi.ModeHTML
-	bot.Send(msg)
 }
 
 func sendMenu(chatId int64, bot *tgbotapi.BotAPI) error {
-	msg := tgbotapi.NewMessage(chatId, firstMenu)
+	msg := tgbotapi.NewMessage(chatId, menuText)
 	msg.ParseMode = tgbotapi.ModeHTML
-	msg.ReplyMarkup = firstMenuMarkup
+	msg.ReplyMarkup = menuMarkup
 	_, err := bot.Send(msg)
 	return err
 }
