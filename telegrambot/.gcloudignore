@@ -1,0 +1,8 @@
+vendor/**.md
+vendor/**.txt
+vendor/**.yaml
+vendor/**Makefile
+vendor/**.sh
+venfor/**.tmpl
+venfor/**.gitignore
+venfor/**.lock

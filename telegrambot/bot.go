@@ -1,66 +1,26 @@
-package main
+package telegrambot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	_ "github.com/GoogleCloudPlatform/functions-framework-go/funcframework"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
 )
 
-func loadDotEnv() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Can't find .env file nearby to get secrets.")
-	}
-}
-
-func main() {
-	loadDotEnv()
-	bot, err := tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_APITOKEN"))
-	if err != nil {
-		log.Fatalf("Can't connect to Telegram: %v", err)
-	}
-	bot.Debug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
-	if err != nil {
-		log.Fatalf("Can't read TELEGRAM_DEBUG environment variable: %v", err)
-	}
-
-	updateConfig := tgbotapi.NewUpdate(0)
-	updateConfig.Timeout = 30
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// Start bot in separate goroutine.
-	updates := bot.GetUpdatesChan(updateConfig)
-	go receiveUpdates(ctx, updates, bot)
-	log.Println("Start listening for updates. Press Enter key to stop.")
-
-	// Wait Enter to stop bot.
-	fmt.Scanln()
-	log.Println("Bot stopped.")
-	os.Exit(0)
-}
-
-func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel, bot *tgbotapi.BotAPI) {
-	for {
-		select {
-		case <-ctx.Done(): // Stop if someone ("main") stopped context.
-			return
-		case update := <-updates:
-			handleUpdate(update, bot)
-		}
-	}
-}
-
 var (
+	bot  *tgbotapi.BotAPI
+	port int16
+
 	help = `Hi. Bot supports following commands:
 	/help - prints this help.
 	/menu - shows menu.
@@ -86,6 +46,77 @@ var (
 		),
 	)
 )
+
+func init() {
+	loadDotEnv()
+	var err error
+	bot, err = tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_APITOKEN"))
+	if err != nil {
+		log.Fatalf("Can't connect to Telegram: %v", err)
+	}
+	bot.Debug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
+	if err != nil {
+		log.Fatalf("Can't read TELEGRAM_DEBUG environment variable: %v", err)
+	}
+	log.Printf("Initialized bot with %d chars length API TOKEN and DEBUG=%t", len(bot.Token), bot.Debug)
+
+	rand.Seed(time.Now().UnixNano())
+
+	// TODO Check for errors left during bot inactivtiy.
+	info, err := bot.GetWebhookInfo()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if info.LastErrorDate != 0 {
+		log.Printf("Telegram last fail on delivering webhhook at %v: %s", info.LastErrorDate, info.LastErrorMessage)
+	}
+}
+
+func loadDotEnv() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Can't find .env file nearby to get secrets.")
+	}
+}
+
+func StartPollingLocally() {
+	updateConfig := tgbotapi.NewUpdate(0)
+	updateConfig.Timeout = 30
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Start bot in separate goroutine.
+	updates := bot.GetUpdatesChan(updateConfig)
+	go receiveUpdates(ctx, updates)
+	log.Println("Start listening for updates. Press Enter key to stop.")
+
+	// Wait Enter to stop bot.
+	fmt.Scanln()
+	log.Println("Bot stopped.")
+	os.Exit(0)
+}
+
+// Entry point for "webhook" connection.
+func HandleTelegramWebHook(w http.ResponseWriter, r *http.Request) {
+	var update tgbotapi.Update
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		log.Printf("Could not decode incoming update %s", err.Error())
+	}
+	handleUpdate(update, bot)
+}
+
+// Entry point for "polling" connection.
+func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
+	for {
+		select {
+		case <-ctx.Done(): // Stop if someone ("main") stopped context.
+			return
+		case update := <-updates:
+			handleUpdate(update, bot)
+		}
+	}
+}
 
 func handleUpdate(update tgbotapi.Update, bot *tgbotapi.BotAPI) {
 	switch {
@@ -121,7 +152,6 @@ func handleMessage(message *tgbotapi.Message, bot *tgbotapi.BotAPI) {
 	} else {
 		words := strings.Split(text, " ")
 		if len(words) > 1 {
-			rand.Seed(time.Now().UnixNano())
 			rand.Shuffle(len(words), func(i, j int) { words[i], words[j] = words[j], words[i] })
 			text = strings.Join(words, " ")
 		}
