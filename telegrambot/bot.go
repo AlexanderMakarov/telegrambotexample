@@ -12,9 +12,10 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/GoogleCloudPlatform/functions-framework-go/funcframework"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
+
+	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 var (
@@ -48,21 +49,38 @@ var (
 )
 
 func init() {
-	loadDotEnv()
+
+	// If executing not in GCP then need to load environment variables from .env file.
+	// https://stackoverflow.com/a/61692563/1535127
+	if _, ok := os.LookupEnv("X_GOOGLE_FUNCTION_REGION"); !ok {
+		log.Println("Running not on GCP, loading '.env' file.")
+		loadDotEnv()
+	}
+
+	telegramApiToken := os.Getenv("TELEGRAM_APITOKEN")
+	if len(telegramApiToken) <= 0 {
+		log.Fatal("Can't find TELEGRAM_APITOKEN environment variable.")
+	}
+	telegramDebug := false
 	var err error
-	bot, err = tgbotapi.NewBotAPI(os.Getenv("TELEGRAM_APITOKEN"))
+	telegramDebug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
+	if err != nil {
+		log.Printf("Can't read TELEGRAM_DEBUG environment variable, will use FALSE value: %v", err)
+	}
+	log.Printf("Got from environment len(TELEGRAM_APITOKEN)=%d, DEBUG=%t", len(telegramApiToken), telegramDebug)
+
+	// Create Telegram Bot instance.
+	bot, err = tgbotapi.NewBotAPI(telegramApiToken)
 	if err != nil {
 		log.Fatalf("Can't connect to Telegram: %v", err)
 	}
-	bot.Debug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
-	if err != nil {
-		log.Fatalf("Can't read TELEGRAM_DEBUG environment variable: %v", err)
-	}
-	log.Printf("Initialized bot with %d chars length API TOKEN and DEBUG=%t", len(bot.Token), bot.Debug)
+	bot.Debug = telegramDebug
+	log.Println("Initialized NewBotAPI")
 
+	// Add seed to "rand" module.
 	rand.Seed(time.Now().UnixNano())
 
-	// TODO Check for errors left during bot inactivtiy.
+	// Check for errors left during bot inactivtiy.
 	info, err := bot.GetWebhookInfo()
 	if err != nil {
 		log.Fatal(err)
@@ -70,6 +88,10 @@ func init() {
 	if info.LastErrorDate != 0 {
 		log.Printf("Telegram last fail on delivering webhhook at %v: %s", info.LastErrorDate, info.LastErrorMessage)
 	}
+
+	// Start serve locally (onlyf for local).
+	functions.HTTP("HandleTelegramWebHook", HandleTelegramWebHook)
+	log.Println("Initialization is completed.")
 }
 
 func loadDotEnv() {
@@ -126,6 +148,8 @@ func handleUpdate(update tgbotapi.Update, bot *tgbotapi.BotAPI) {
 	case update.CallbackQuery != nil: // Buttons (aka InlineKeyboard events).
 		handleButton(update.CallbackQuery, bot)
 		break
+	default:
+		log.Printf("Received unsupported update: %v", update)
 	}
 }
 
