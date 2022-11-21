@@ -58,13 +58,16 @@ func init() {
 	var err error
 	var envMap map[string]string
 
-	// Check if executing on GCP, https://stackoverflow.com/a/61692563/1535127
-	if _, ok := os.LookupEnv("X_GOOGLE_FUNCTION_REGION"); ok {
+	log.Printf("printenv: %v", os.Environ()) // TODO remove
+
+	// Check if executing on GCP, https://cloud.google.com/functions/docs/configuring/env-var#python_37_and_go_111
+	if projectName, ok := os.LookupEnv("GCP_PROJECT_NAME"); ok {
 
 		// Get data from GCP Secret Manager.
 		SECRET_NAME := "telegram-bot-secret"
-		log.Printf("Running on GCP, loading '%s' secret last version to get configuration from.", SECRET_NAME)
-		secret, err := accessSecretVersion(SECRET_NAME)
+		log.Printf("Running on GCP, loading '%s' project '%s' secret last version to get configuration from.",
+			projectName, SECRET_NAME)
+		secret, err := accessSecretVersion(projectName, SECRET_NAME)
 		if err != nil {
 			log.Fatalf("Can't read '%s' secret: %v", SECRET_NAME, err)
 		}
@@ -127,7 +130,7 @@ func init() {
 	log.Println("Initialization is completed.")
 }
 
-func accessSecretVersion(secretName string) ([]byte, error) {
+func accessSecretVersion(projectName string, secretName string) ([]byte, error) {
 
 	// Create the client.
 	ctx := context.Background()
@@ -139,7 +142,7 @@ func accessSecretVersion(secretName string) ([]byte, error) {
 
 	// Build the request.
 	req := &secretmanagerpb.AccessSecretVersionRequest{
-		Name: fmt.Sprintf("projects/%v/secrets/%v/versions/%v", '*', secretName, "latest"),
+		Name: fmt.Sprintf("projects/%v/secrets/%v/versions/%v", projectName, secretName, "latest"),
 	}
 
 	// Call the API.

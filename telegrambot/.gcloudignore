@@ -1,4 +1,5 @@
 #.gcloudignore
+# 'vendor/**' with 'vendor/**!*.go' doesn't work so enumerate all types we don't need.
 vendor/**.md
 vendor/**.txt
 vendor/**.yaml
@@ -8,3 +9,4 @@ vendor/**.tmpl
 vendor/**.gitignore
 vendor/**.lock
 vendor/**LICENSE
+cmd/**
