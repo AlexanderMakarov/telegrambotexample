@@ -39,7 +39,7 @@ After 'Serving function: "HandleTelegramWebHook"' message try to check it with `
 - Get your Go version with `go version`. Find closest or more suitable on https://cloud.google.com/functions/docs/concepts/go-runtime#gcloud to use as an argument to the next command.
 - Create a vendor directory using the contents of go.mod file with `go mod vendor`. It will created "vendor" directory with dependencies.
 - TODO .env.yaml
-- Create secret to store Telegram Bot API with `gcloud secrets create telegram-bot-secret --replication-policy="automatic"` (type "y" when/if it asks for enabling API). Upload secret with `gcloud secrets versions add telegram-bot-secret --data-file=".env"`.
+- Create secret to store Telegram Bot API with `gcloud secrets create telegram-bot-secret --replication-policy="automatic"` (type "y" when/if it asks for enabling API). Upload secret with `gcloud secrets versions add telegram-bot-secret --data-file=".env"`. It may be verified on https://console.cloud.google.com/security/secret-manager/secret/telegram-bot-secret/.
 - Run <pre>`gcloud functions deploy telegram-bot \`
     `--gen2 \`
     `--runtime=go116 \`

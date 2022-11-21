@@ -14,6 +14,9 @@ import (
 
 	"github.com/joho/godotenv"
 
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
+	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -49,23 +52,53 @@ var (
 )
 
 func init() {
-
-	// If executing not in GCP then need to load environment variables from .env file.
-	// https://stackoverflow.com/a/61692563/1535127
-	if _, ok := os.LookupEnv("X_GOOGLE_FUNCTION_REGION"); !ok {
-		log.Println("Running not on GCP, loading '.env' file.")
-		loadDotEnv()
-	}
-
-	telegramApiToken := os.Getenv("TELEGRAM_APITOKEN")
-	if len(telegramApiToken) <= 0 {
-		log.Fatal("Can't find TELEGRAM_APITOKEN environment variable.")
-	}
-	telegramDebug := false
+	var telegramDebugStr string
+	var telegramDebug bool
+	var telegramApiToken string
 	var err error
-	telegramDebug, err = strconv.ParseBool(os.Getenv("TELEGRAM_DEBUG"))
+	var envMap map[string]string
+
+	// Check if executing on GCP, https://stackoverflow.com/a/61692563/1535127
+	if _, ok := os.LookupEnv("X_GOOGLE_FUNCTION_REGION"); ok {
+
+		// Get data from GCP Secret Manager.
+		SECRET_NAME := "telegram-bot-secret"
+		log.Printf("Running on GCP, loading '%s' secret last version to get configuration from.", SECRET_NAME)
+		secret, err := accessSecretVersion(SECRET_NAME)
+		if err != nil {
+			log.Fatalf("Can't read '%s' secret: %v", SECRET_NAME, err)
+		}
+		envMap, err = godotenv.Unmarshal(string(secret))
+		if err != nil {
+			log.Fatalf("Can't parse '%s' secret latest version data as 'key=value' pairs: %v", SECRET_NAME, err)
+		}
+	} else {
+
+		// Load environment variables from local .env file.
+		log.Println("Running locally, reading '.env' file.")
+		envMap, err = godotenv.Read(".env")
+		if err != nil {
+			log.Fatalf("Can't find .env file nearby to get configuration from: %v", err)
+		}
+	}
+
+	for k, v := range envMap {
+		switch k {
+		case "TELEGRAM_APITOKEN":
+			telegramApiToken = v
+			break
+		case "TELEGRAM_DEBUG":
+			telegramDebugStr = v
+		}
+	}
+
+	// Check/convert input variables.
+	if len(telegramApiToken) <= 0 {
+		log.Fatal("Can't find TELEGRAM_APITOKEN value.")
+	}
+	telegramDebug, err = strconv.ParseBool(telegramDebugStr)
 	if err != nil {
-		log.Printf("Can't read TELEGRAM_DEBUG environment variable, will use FALSE value: %v", err)
+		log.Printf("Can't parse TELEGRAM_DEBUG value, will use FALSE: %v", err)
 	}
 	log.Printf("Got from environment len(TELEGRAM_APITOKEN)=%d, DEBUG=%t", len(telegramApiToken), telegramDebug)
 
@@ -94,11 +127,29 @@ func init() {
 	log.Println("Initialization is completed.")
 }
 
-func loadDotEnv() {
-	err := godotenv.Load()
+func accessSecretVersion(secretName string) ([]byte, error) {
+
+	// Create the client.
+	ctx := context.Background()
+	client, err := secretmanager.NewClient(ctx)
 	if err != nil {
-		log.Fatalf("Can't find .env file nearby to get secrets.")
+		return nil, fmt.Errorf("Failed to create secretmanager client: %v", err)
 	}
+	defer client.Close()
+
+	// Build the request.
+	req := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: fmt.Sprintf("projects/%v/secrets/%v/versions/%v", '*', secretName, "latest"),
+	}
+
+	// Call the API.
+	result, err := client.AccessSecretVersion(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to access secret version: %v", err)
+	}
+
+	fmt.Printf("Retrieved payload for: %s\n", result.Name)
+	return result.Payload.Data, nil
 }
 
 func StartPollingLocally() {
